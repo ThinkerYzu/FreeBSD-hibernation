@@ -1,0 +1,245 @@
+Support Hibernation on FreeBSD
+
+Contact Details
+Name: Kui-Feng (Thinker) Lee
+Email: thinker.li@gmail.com
+
+Bio
+===
+
+Kui-Feng used to contribute to the FreeBSD community for several years
+by working on ports and hardware drivers. In the past few years, he
+has been employed to work on the Linux eBPF subsystem. He has also
+been a freelancer for many years, providing services to hardware and
+chip vendors. These services include maintaining BSP (Board Support
+Package), board setup, and system integration.
+
+Executive Summary
+=================
+
+FreeBSD laptop users have had problems with putting their laptops to
+sleep for a while. Some of the issues are related to hardware or
+drivers, while others are due to features that FreeBSD doesn't
+have. One key feature missing is the ability to hibernate the laptop
+by saving its current state to the hard disk. By adding support for
+the ACPI S4 mode, we can make progress in supporting laptops better.
+
+Project Description
+===================
+
+The objective is to put a computer running FreeBSD to sleep, power it
+off, and then reboot it with all programs and files retaining their
+current state, including running programs, memory, open files, network
+connections, and more. This feature is known as supporting ACPI S4
+mode or hibernation.
+
+ACPI S4 mode, also known as hibernation, is a deeper sleep mode than
+S3 (suspends to RAM). It is similar to turning the computer off
+completely except monitoring some wake up events; for example, lid
+opening. However, it also allows you to safely turn the computer off
+completely and then wake it back up to resume from where you left off
+in the previous session. It should benefit FreeBSD laptop users by
+consuming less power than S3 mode.
+
+Based on the kernel code, FreeBSD can enter a mode called S4BIOS where
+the system saves memory content to disk via the BIOS, and it does not
+have S4OS support. S4 mode is like S3 mode but with the difference
+that memory is not powered during S4 mode. This means that memory
+content needs to be saved before entering S4 mode and reloaded after
+waking up. The BIOS takes care of this process for S4BIOS, but for
+S4OS, the kernel or loader needs to manage it.
+
+The project aims to enable the FreeBSD kernel to store memory data in
+a hibernation image before the computer enters S4 mode. The bootloader
+then reloads this data. The hibernation image is stored on a swap
+device. Essentially, all memory data is moved to the swap device along
+with metadata.
+
+Once the kernel and the bootloader has been enabled, rest of the
+procedure of entering and leaving S4 is similar to S3.
+
+Short-term Goal
+---------------
+
+Hibernate FreeBSD on a computer with a specific x86 platform model
+without any graphical user interface. The hard drives and terminal
+should function normally after the system wakes up from
+hibernation. The outgoing connections will be disconnected upon waking
+up, but local connections will still be functional. In this case, NIC
+may need to be restarted manually or with a user-created script.
+
+Mid-term Goal
+-------------
+
+Put a specific model of machine running FreeBSD into hibernation mode
+while a graphical user interface (GUI) is running. Ensure that the X
+server can continue to operate normally without needing to be
+restarted.
+
+Long-term Goal
+--------------
+
+Put various models of machines running FreeBSD into hibernation mode.
+
+Known Issues
+------------
+
+When saving the current system state, we want to ensure that the state
+remains the same. However, certain events can alter the state, such as
+the timing of hardware interrupts, the scheduler driven by a hardware
+timer, and signals and data received from networks and other
+interfaces. These events are unpredictable.
+
+To make the problem easier, we need to reduce interruptions by only
+allowing essential ones. We should also pause the CPU scheduler to
+prevent multitasking and multi-threading. It is preferable to
+deactivate all CPUs, except for the one handling hibernation. The
+current implementation has effectively carried out these steps for S3
+mode.
+
+The current state will be saved in the swap device. The amount of data
+in the computer's memory may be too large for the swap device to
+handle. When a computer is busy, the swap device may already be full
+before it tries to enter hibernation mode. In this situation, there
+may not be enough space to save all the data in memory, causing the
+hibernation process to fail.
+
+When a machine is not in use, certain devices can be unplugged or
+detached. After the system wakes up from being in hibernation, there
+may still be references to devices that are no longer connected. The
+device driver needs to recognize this and remove itself from the
+system.
+
+When restarting the computer from hibernation, drivers have to set up
+the hardware so that it can function again. This process is the same
+as the S3 mode. The device interfice has declared suspend() and
+resume() methods to be called before entering S3 mode and after
+leaving S3 mode. The bus interface has declared suspend_child() and
+resume_child(). S4 mode just need to follow the same path.
+
+Hibernation Image
+-----------------
+
+Hibernation image is the storage that we save the current state of a
+system. This storage can be a file or a device. Right now, we decide
+to use a swap device for this purpose to keep things simple. We aim to
+write the content of all anonymous pages to the swap
+device. Otherwise, pages that are backed by files or devices should
+also be written out to their original files or devices if they are
+dirty.
+
+In the hibernation image, some of the first blocks are reserved to
+hold metadata. The kernel contains a special code that helps the
+system wake up from hibernation. This metadata helps in loading the
+code into memory and provides information required to carry out the
+rest of its tasks.
+
+Memory pages can be categorized into two types: pages that can be
+paged out and pages that can not.  When it comes to the pages can be
+paged out, we need to make sure to write their contents back to their
+original source, whether that's a file or a device. This process can
+make the vm daemon process swap out other processes to free up their
+memory pages.  It may also be needed to flush all buffers to free
+memory pages.
+
+For the pages that are still in use, we have to allocate spaces in the
+swap device, write them to the spaces and store their physical address
+and location on the swap device in the metadata of the hibernation
+image. This way, we can reload them back into memory from the swap
+device to wake up from hibernation.
+
+Deliverables
+============
+
+1. A set of patches that enable FreeBSD kernel to support hibernation.
+
+2. A set of patches that verify and load the hibernation image from
+   the boot loader.
+
+3. A set of rc scripts that run before and after the computer goes
+   into hibernation.
+
+
+Development Process
+===================
+
+The plan is to achieve the short-term goal within a few months. The
+mid-term goal involves dealing with complex issues related to video
+and GPU drivers, which may require resources from the vendors. I
+cannot make a long-term plan for mid-term goal because my schedule is
+uncertain.
+
+Phase 1 (5 Weeks)
+-----------------
+
+The main goal is to put a QEMU machine with simple hardware features
+into hibernation. "acpiconf -s 4" should initiate hibernation and
+power off the machine. When the machine is turned back on, it should
+resume from the hibernation image.
+
+Certain test programs need to run in the background to access files
+and communicate with each other using a local connection. Examples of
+such programs include iperf and stress-ng.
+
+ - iperf will be used to check if local network connections survive in
+   hibernation.
+
+ - stress-ng will be used to check if file operations and various of
+   other operations survive in hibernation.
+
+Phase 2 (4 Weeks)
+-----------------
+
+The main objective is to switch a specific machine model to S4
+mode. This may involve using rc scripts to set up the system for
+hibernation and then bring it back from hibernation. The Wi-Fi and
+network interface cards may be disabled before saving the current
+status.
+
+Due to disabling network connections, the machine's external
+connections will be cut off. Local files and communication will still
+work during hibernation, but files on removable devices may not be
+accessible anymore. Detaching a device should not lead to issues such
+as the machine crashing.
+
+Additionally, USB devices might be removed from the system before
+entering hibernation mode.
+
+Testing
+=======
+
+One or more test scripts will be provided to run background tasks,
+start hibernation, and check if the system resume from hibernation
+correctly. The scripts should work on a QEMU machine and on a
+particular model of machine.
+
+The background tasks should includes
+
+ - local connections (TCP/pipes/...)
+
+ - remote ocnnections
+
+ - manipulate local files
+
+ - other IPCs (shm/msg/...)
+
+Documentation
+=============
+
+Man Pages
+---------
+
+ - Update acpi(4) to include information about configuration for
+   hibernation.
+
+Handbook
+--------
+
+ - Update chapter 14 for ACPI configuration.
+
+References
+==========
+
+ 1. [Pain and Suffering on the Road to RESUME](https://freebsdfoundation.org/wp-content/uploads/2018/04/Pain-and-Suffering-on-the-Road-to-Resume.pdf)
+ 2. [Suspend/Resume to Disk - Hibernation - iFFS/IRST Partition (Intel Fast Flash/Intel Rapid Start Technology)](https://forums.freebsd.org/threads/suspend-resume-to-disk-hibernation-iffs-irst-partition-intel-fast-flash-intel-rapid-start-technology.75860/)
+ 
